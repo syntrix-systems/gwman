@@ -29,7 +29,7 @@ This project was originally designed to convert a single board computer with lim
 
 # Installation
 
-1. Clone the project and extract it
+1. Clone the project
 2. Run the installer
 ```bash
 bash install.sh
