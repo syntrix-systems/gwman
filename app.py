@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """gwmanager - Debian router/gateway manager. Runs as root. Drives ip, nftables, OpenVPN, strongSwan, xl2tpd."""
 from collections import deque
-import getpass, ipaddress, json, os, re, secrets, socket, subprocess, sys, threading, time, urllib.parse, zlib
+import getpass, ipaddress, json, os, re, secrets, shutil, socket, ssl, subprocess, sys, threading, time, urllib.parse, zlib
 from flask import Flask, request, jsonify, session, send_file
 from werkzeug.security import generate_password_hash, check_password_hash
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CFG = os.environ.get("GW_CONFIG", "/etc/gwmanager/config.json")
 PKI = os.path.join(os.path.dirname(CFG), "pki")
+TLS = os.path.join(os.path.dirname(CFG), "tls")
 PROTO = "77"  # routes we own are tagged "proto 77"
 NAME = re.compile(r"^[a-z][a-z0-9]{0,7}$")
 IFN = re.compile(r"^[\w.\-]{1,15}$")
@@ -20,6 +21,8 @@ ESP = "aes256-sha1,aes128-sha1,3des-sha1!"
 DEFAULT = {"admin_hash": "", "secret": "", "lan_ifaces": [], "nat": True, "vpn_clients": [], "routes": [],
            "ovpn_server": {"enabled": False, "port": 1194, "proto": "udp", "subnet": "10.8.0.0/24", "public_host": "",
                            "push_routes": [], "dns": "", "redirect": False, "clients": []},
+           "firewall": {"enabled": False, "policy": {"INPUT": "keep", "FORWARD": "keep", "OUTPUT": "keep"}, "keep_ports": "22", "rules": []},
+           "socks_server": {"enabled": False, "listen": "127.0.0.1", "port": 1080, "username": "", "password": ""},
            "l2tp_server": {"enabled": False, "psk": "", "local_ip": "10.9.0.1", "pool": "10.9.0.10-10.9.0.100",
                            "dns": "", "users": []}}
 
@@ -96,6 +99,11 @@ def validate(c):
     if not re.match(r"^\d+\.\d+\.\d+\.\d+-\d+\.\d+\.\d+\.\d+$", l["pool"]): raise ValueError("pool: a.b.c.d-e.f.g.h")
     for u in l["users"]: safe(u["username"], "user"); safe(u["password"], "password")
     if l["enabled"] and not l["psk"]: raise ValueError("L2TP server needs a PSK")
+    k = c["socks_server"]; ip = ipaddress.IPv4Address(k["listen"]); k["port"] = int(k["port"])
+    if not 0 < k["port"] < 65536: raise ValueError("bad SOCKS port")
+    for x in (k["username"], k["password"]):
+        if x and not re.match(r"^[^\s\"'\\%$]+$", x): raise ValueError("SOCKS credentials: no spaces or quotes, backslash, % or $")
+    if bool(k["username"]) != bool(k["password"]): raise ValueError("SOCKS: set both username and password, or neither")
 
 def ifup(n):
     rc, o = sh("ip", "-j", "link", "show", "dev", n)
@@ -129,9 +137,11 @@ def sync_ovpn_clients(c):
 def l2tp_connect(n):
     if time.time() - state["attempt"].get(n, 0) < 30: return
     state["attempt"][n] = time.time()
-    sh("ipsec", "up", f"gwc-{n}")
-    try: open("/var/run/xl2tpd/l2tp-control", "w").write(f"c gwc-{n}\n")
-    except OSError: pass
+    def go():  # ipsec up can take many seconds: never block the caller
+        sh("ipsec", "up", f"gwc-{n}")
+        try: open("/var/run/xl2tpd/l2tp-control", "w").write(f"c gwc-{n}\n")
+        except OSError: pass
+    threading.Thread(target=go, daemon=True).start()
 
 def l2tp_disconnect(n):
     try: open("/var/run/xl2tpd/l2tp-control", "w").write(f"d gwc-{n}\n")
@@ -208,6 +218,20 @@ def sync_proxies(c):
             if ch[n]: sh("systemctl", "restart", u)
         else: sh("systemctl", "disable", "--now", u)
 
+# ---------------- inbound SOCKS5 (microsocks) ----------------
+def sync_socks(c):
+    k = c["socks_server"]; u = "gw-socks.service"
+    if not k["enabled"]: sh("systemctl", "disable", "--now", u); return
+    mb = shutil.which("microsocks")
+    if not mb: raise RuntimeError("microsocks is not installed (apt install microsocks)")
+    auth = f' -u "{k["username"]}" -P "{k["password"]}"' if k["username"] else ""
+    ch = wr(f"/etc/systemd/system/{u}", f"[Unit]\nDescription=GW SOCKS5 inbound (microsocks)\nAfter=network-online.target\n\n[Service]\n"
+            f"ExecStart={mb} -i {k['listen']} -p {k['port']}{auth}\nDynamicUser=yes\nAmbientCapabilities=CAP_NET_BIND_SERVICE\nNoNewPrivileges=yes\n"
+            "Restart=always\nRestartSec=3\n\n[Install]\nWantedBy=multi-user.target\n")
+    if ch: sh("systemctl", "daemon-reload")
+    sh("systemctl", "enable", "--now", u)
+    if ch: sh("systemctl", "restart", u)
+
 # ---------------- OpenVPN server + PKI ----------------
 def issue(cn, eku):
     p = lambda e: os.path.join(PKI, f"{cn}.{e}")
@@ -215,6 +239,26 @@ def issue(cn, eku):
     wr(p("ext"), f"extendedKeyUsage={eku}\nsubjectAltName=DNS:{cn}\n")
     rc, o = sh("openssl", "x509", "-req", "-in", p("csr"), "-CA", f"{PKI}/ca.crt", "-CAkey", f"{PKI}/ca.key", "-CAcreateserial", "-out", p("crt"), "-days", "3650", "-extfile", p("ext"))
     if rc: raise RuntimeError(o)
+
+def ensure_web_tls():
+    # self-signed cert for the web UI itself; browsers will show an "invalid certificate" warning, which is expected.
+    cert, key = f"{TLS}/cert.pem", f"{TLS}/key.pem"
+    if os.path.exists(cert) and os.path.exists(key): return cert, key
+    os.makedirs(TLS, mode=0o700, exist_ok=True)
+    host = socket.gethostname()
+    ips = set()
+    try:
+        rc, o = sh("ip", "-j", "-4", "addr")
+        for i in json.loads(o or "[]"):
+            for a in i.get("addr_info", []):
+                if a["family"] == "inet": ips.add(a["local"])
+    except Exception: pass
+    san = ",".join([f"DNS:{host}", "DNS:localhost", "IP:127.0.0.1"] + [f"IP:{ip}" for ip in sorted(ips)])
+    wr(f"{TLS}/san.cnf", f"[req]\ndistinguished_name=req\n[san]\nsubjectAltName={san}\n", 0o600)
+    sh("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
+       "-keyout", key, "-out", cert, "-subj", f"/CN={host}", "-days", "3650", "-extensions", "san", "-config", f"{TLS}/san.cnf")
+    os.chmod(key, 0o600)
+    return cert, key
 
 def ensure_pki():
     os.makedirs(PKI, mode=0o700, exist_ok=True)
@@ -258,10 +302,25 @@ def apply_nft(c):
     rc, o = sh("nft", "-f", "-", inp=script)
     if rc: raise RuntimeError(o)
 
+dns_cache = {}
+
+def resolve(h):  # hostname lookup with a 3 s timeout and a 5 min cache, so a slow resolver can't freeze the UI
+    try: return str(ipaddress.ip_address(h))
+    except ValueError: pass
+    ent = dns_cache.get(h)
+    if ent and time.time() - ent[1] < 300: return ent[0]
+    res = []
+    def go():
+        try: res.append(socket.gethostbyname(h))
+        except Exception: pass
+    th = threading.Thread(target=go, daemon=True); th.start(); th.join(3)
+    if res: dns_cache[h] = (res[0], time.time()); return res[0]
+    return ent[0] if ent else None
+
 def endpoint(v):
     try:
         h = v["host"] if v["type"] in PROXY else v["server"] if v["type"] == "l2tp" else next((l.split()[1] for l in v["ovpn"].splitlines() if l.strip().startswith("remote ")), None)
-        ip = socket.gethostbyname(h) if h else None
+        ip = resolve(h) if h else None
         return None if ip and ipaddress.ip_address(ip).is_private else ip  # private/on-link servers are reached normally, no pin
     except Exception: return None
 
@@ -296,7 +355,7 @@ def apply_routes(c):
 def reconcile(c):
     errs = []
     sh("sysctl", "-qw", "net.ipv4.ip_forward=1", "net.ipv4.conf.all.rp_filter=2", "net.ipv4.conf.default.rp_filter=2")
-    for f in (sync_ovpn_clients, sync_l2tp, sync_proxies, sync_ovpn_server, apply_nft, apply_routes):
+    for f in (sync_ovpn_clients, sync_l2tp, sync_proxies, sync_socks, sync_ovpn_server, apply_nft, apply_firewall, apply_routes):
         try: f(c)
         except Exception as e: errs.append(f"{f.__name__}: {e}")
     state["errors"] = errs
@@ -314,10 +373,112 @@ def loop():
                 else:
                     for v in c["vpn_clients"]:
                         if v["type"] == "l2tp" and v.get("enabled") and not ifup(vif(v)): l2tp_connect(v["name"])
+                    fw = state.get("fw_cand") or c["firewall"]
+                    if fw["enabled"] and shutil.which("iptables") and sh("iptables", "-C", "INPUT", "-j", "GW_INPUT")[0] != 0: apply_firewall(c)  # someone flushed us
                     if sig(c) != last: apply_routes(c)
                 last = sig(c)
         except Exception as e: state["errors"] = [str(e)]
         time.sleep(15)
+
+# ---------------- firewall (iptables) ----------------
+HOOKS = (("filter", "INPUT"), ("filter", "FORWARD"), ("filter", "OUTPUT"), ("nat", "PREROUTING"), ("nat", "POSTROUTING"), ("nat", "OUTPUT"))
+CHAINS = {"filter": ("INPUT", "FORWARD", "OUTPUT"), "nat": ("PREROUTING", "POSTROUTING", "OUTPUT")}
+ACTIONS = {"filter": ("ACCEPT", "DROP", "REJECT", "LOG", "RETURN"), "nat": ("ACCEPT", "RETURN", "DNAT", "SNAT", "MASQUERADE", "REDIRECT")}
+PORTS = re.compile(r"^\d{1,5}(:\d{1,5})?(,\d{1,5}(:\d{1,5})?)*$")
+
+def ports_ok(v): return bool(PORTS.match(v)) and all(0 < int(x) < 65536 for x in re.findall(r"\d+", v))
+
+def validate_fw(fw):
+    out = {"enabled": bool(fw.get("enabled")), "keep_ports": str(fw.get("keep_ports", "")).strip(), "policy": {}, "rules": []}
+    if out["keep_ports"] and not ports_ok(out["keep_ports"]): raise ValueError("bad 'always allow' ports")
+    for ch in ("INPUT", "FORWARD", "OUTPUT"):
+        p = (fw.get("policy") or {}).get(ch, "keep")
+        if p not in ("keep", "ACCEPT", "DROP"): raise ValueError("bad policy")
+        out["policy"][ch] = p
+    for n, r in enumerate(fw.get("rules") or [], 1):
+        e = lambda m: ValueError(f"rule {n}: {m}")
+        t, ch, act = r.get("table"), r.get("chain"), r.get("action")
+        if t not in CHAINS or ch not in CHAINS[t]: raise e("bad chain")
+        if act not in ACTIONS[t]: raise e(f"{act} is not valid in table {t}")
+        if act in ("DNAT", "REDIRECT") and ch not in ("PREROUTING", "OUTPUT"): raise e(f"{act} only works in PREROUTING/OUTPUT")
+        if act in ("SNAT", "MASQUERADE") and ch != "POSTROUTING": raise e(f"{act} only works in POSTROUTING")
+        x = {"enabled": bool(r.get("enabled", True)), "table": t, "chain": ch, "action": act, "proto": r.get("proto", "any")}
+        if x["proto"] not in ("any", "tcp", "udp", "icmp"): raise e("bad protocol")
+        for k in ("src", "dst"):
+            v = str(r.get(k, "")).strip(); x[k] = str(net4(v)) if v else ""
+        for k, bad in (("iif", ("OUTPUT", "POSTROUTING")), ("oif", ("INPUT", "PREROUTING"))):
+            v = str(r.get(k, "")).strip()
+            if v and (not re.match(r"^[A-Za-z0-9_.\-+]{1,15}$", v) or ch in bad): raise e(f"bad or unusable {'in' if k == 'iif' else 'out'} interface for {ch}")
+            x[k] = v
+        for k in ("sport", "dport"):
+            v = str(r.get(k, "")).strip()
+            if v and (x["proto"] not in ("tcp", "udp") or not ports_ok(v)): raise e(f"bad {k} (needs tcp/udp; e.g. 80 or 80,443 or 1000:2000)")
+            x[k] = v
+        x["state"] = r.get("state", "")
+        if x["state"] not in ("", "NEW", "ESTABLISHED,RELATED", "NEW,ESTABLISHED,RELATED", "INVALID"): raise e("bad state")
+        to = str(r.get("to", "")).strip()
+        pats = {"DNAT": r"^\d+\.\d+\.\d+\.\d+(:\d{1,5}(-\d{1,5})?)?$", "SNAT": r"^\d+\.\d+\.\d+\.\d+(-\d+\.\d+\.\d+\.\d+)?$", "REDIRECT": r"^\d{1,5}(-\d{1,5})?$"}
+        if act in pats:
+            if not re.match(pats[act], to): raise e(f"{act} needs a valid 'to' value")
+            for ip in re.findall(r"\d+\.\d+\.\d+\.\d+", to): ipaddress.IPv4Address(ip)
+        else: to = ""
+        x["to"] = to
+        cm = str(r.get("comment", "")).strip()
+        if not re.match(r"^[\w .,:/@()\-]{0,40}$", cm): raise e("comment: max 40 chars, letters/digits/basic punctuation")
+        x["comment"] = cm; out["rules"].append(x)
+    return out
+
+def rule_spec(r):
+    a = []
+    if r["proto"] != "any": a += ["-p", r["proto"]]
+    for f, v in (("-s", r["src"]), ("-d", r["dst"]), ("-i", r["iif"]), ("-o", r["oif"])):
+        if v: a += [f, v]
+    if r["sport"]: a += ["-m", "multiport", "--sports", r["sport"]]
+    if r["dport"]: a += ["-m", "multiport", "--dports", r["dport"]]
+    if r["state"]: a += ["-m", "conntrack", "--ctstate", r["state"]]
+    if r["comment"]: a += ["-m", "comment", "--comment", f'"{r["comment"]}"']
+    a += ["-j", r["action"]]
+    a += {"DNAT": ["--to-destination", r["to"]], "SNAT": ["--to-source", r["to"]], "REDIRECT": ["--to-ports", r["to"]], "LOG": ["--log-prefix", '"gw: "']}.get(r["action"], [])
+    return " ".join(a)
+
+def fw_script(fw):
+    ui = os.environ.get("GW_LISTEN", "0.0.0.0:8443").rsplit(":", 1)[1]
+    ports = ",".join(dict.fromkeys([p for p in fw["keep_ports"].split(",") if p] + [ui]))
+    pol = fw["policy"]; F = {"INPUT": [], "FORWARD": [], "OUTPUT": []}; N = {"PREROUTING": [], "POSTROUTING": [], "OUTPUT": []}
+    est = "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"
+    if pol["INPUT"] == "DROP": F["INPUT"] += ["-i lo -j ACCEPT", est, f"-p tcp -m multiport --dports {ports} -j ACCEPT"]  # anti-lockout
+    if pol["OUTPUT"] == "DROP": F["OUTPUT"] += ["-o lo -j ACCEPT", est]
+    if pol["FORWARD"] == "DROP": F["FORWARD"] += [est]
+    for r in fw["rules"]:
+        if r["enabled"]: (F if r["table"] == "filter" else N)[r["chain"]].append(rule_spec(r))
+    out = ["*filter"] + [f":{ch} {p} [0:0]" for ch, p in pol.items() if p != "keep"]
+    for T, block in (("filter", F), ("nat", N)):
+        if T == "nat": out.append("*nat")
+        for ch, rules in block.items(): out += [f"-F GW_{ch}"] + [f"-A GW_{ch} {x}" for x in rules]
+        out.append("COMMIT")
+    return "\n".join(out) + "\n"
+
+def apply_firewall(c, fw=None):
+    fw = fw or state.get("fw_cand") or c["firewall"]
+    if not shutil.which("iptables-restore"):
+        if fw["enabled"]: raise RuntimeError("iptables is not installed (apt install iptables)")
+        return
+    if not fw["enabled"]:  # tear down our chains and undo the policies we set; never touch anyone else's rules
+        if sh("iptables", "-C", "INPUT", "-j", "GW_INPUT")[0] != 0: return
+        managed = list(dict.fromkeys(ch for src in (c["firewall"], state.get("fw_cand")) if src for ch, p in src["policy"].items() if p != "keep"))
+        sc = ("*filter\n" + "".join(f":{ch} ACCEPT [0:0]\n" for ch in managed) + "".join(f"-F GW_{ch}\n" for ch in CHAINS["filter"]) + "COMMIT\n"
+              "*nat\n" + "".join(f"-F GW_{ch}\n" for ch in CHAINS["nat"]) + "COMMIT\n")
+        rc, o = sh("iptables-restore", "--noflush", inp=sc)
+        if rc: raise RuntimeError(o)
+        for t, ch in HOOKS: sh("iptables", "-t", t, "-D", ch, "-j", "GW_" + ch); sh("iptables", "-t", t, "-X", "GW_" + ch)
+        return
+    for t, ch in HOOKS:  # our own chains, hooked at the top of the built-in ones; filled atomically below
+        sh("iptables", "-t", t, "-N", "GW_" + ch)
+        if sh("iptables", "-t", t, "-C", ch, "-j", "GW_" + ch)[0] != 0:
+            rc, o = sh("iptables", "-t", t, "-I", ch, "1", "-j", "GW_" + ch)
+            if rc: raise RuntimeError(o)
+    rc, o = sh("iptables-restore", "--noflush", inp=fw_script(fw))
+    if rc: raise RuntimeError(o)
 
 # ---------------- system metrics ----------------
 hist = deque(maxlen=240)  # 5 s samples = last 20 min
@@ -355,12 +516,48 @@ app = Flask(__name__); app.config.update(SESSION_COOKIE_SAMESITE="Strict", SESSI
 
 @app.before_request
 def guard():
-    if request.path in ("/", "/api/login"): return
+    if request.path in ("/", "/api/login") or (request.path == "/api/logo" and request.method == "GET"): return
     if not session.get("ok"): return jsonify(error="auth"), 401
     if request.method != "GET" and request.headers.get("X-Requested-With") != "gw": return jsonify(error="bad request"), 400
 
 @app.get("/")
-def index(): return send_file(os.path.join(BASE, "static", "index.html"))
+def index():
+    r = send_file(os.path.join(BASE, "static", "index.html"))
+    r.headers["Cache-Control"] = "no-store"  # always serve the current UI after an update, never a stale cached copy
+    return r
+
+LOGO_TYPES = {"image/png": "png", "image/svg+xml": "svg", "image/jpeg": "jpg", "image/x-icon": "ico", "image/webp": "webp"}
+LOGO = os.path.join(os.path.dirname(CFG), "logo")
+
+@app.get("/api/logo")
+def logo_get():
+    ext = load().get("logo_ext")
+    if not ext or not os.path.exists(f"{LOGO}.{ext}"): return "", 404
+    return send_file(f"{LOGO}.{ext}")
+
+@app.post("/api/logo")
+def logo_set():
+    f = request.files.get("file")
+    if not f or f.mimetype not in LOGO_TYPES: return jsonify(error="use a PNG, SVG, JPEG, WEBP or ICO file"), 400
+    data = f.read(1024 * 1024 + 1)
+    if len(data) > 1024 * 1024: return jsonify(error="max 1 MB"), 400
+    if f.mimetype == "image/svg+xml" and b"<script" in data.lower(): return jsonify(error="SVG must not contain scripts"), 400
+    with lock:
+        c = load()
+        os.makedirs(os.path.dirname(LOGO), exist_ok=True)
+        for e in LOGO_TYPES.values(): rm(f"{LOGO}.{e}")
+        ext = LOGO_TYPES[f.mimetype]
+        with open(f"{LOGO}.{ext}", "wb") as out: out.write(data)
+        c["logo_ext"] = ext; save(c)
+    return jsonify(ok=True)
+
+@app.delete("/api/logo")
+def logo_del():
+    with lock:
+        c = load()
+        for e in LOGO_TYPES.values(): rm(f"{LOGO}.{e}")
+        c["logo_ext"] = ""; save(c)
+    return jsonify(ok=True)
 
 @app.post("/api/login")
 def login():
@@ -385,7 +582,7 @@ def put_config():
     d = request.get_json() or {}
     with lock:
         c = load()
-        for k in ("lan_ifaces", "nat", "vpn_clients", "routes", "l2tp_server"):
+        for k in ("lan_ifaces", "nat", "vpn_clients", "routes", "l2tp_server", "socks_server"):
             if k in d: c[k] = d[k]
         if "ovpn_server" in d: c["ovpn_server"].update({k: v for k, v in d["ovpn_server"].items() if k != "clients"})
         try: validate(c)
@@ -442,10 +639,62 @@ def status():
         ifs.append({"name": i["ifname"], "state": i.get("operstate", ""), "addrs": [f"{a['local']}/{a['prefixlen']}" for a in i.get("addr_info", []) if a["family"] == "inet"]})
     rc, o = sh("ip", "-j", "-4", "route", "show")
     rt = [{"dst": r["dst"], "via": r.get("gateway", ""), "dev": r.get("dev", ""), "proto": r.get("protocol", "")} for r in json.loads(o or "[]")]
-    units = ["strongswan-starter", "xl2tpd", "openvpn-server@gw-server"]
+    units = ["strongswan-starter", "xl2tpd", "openvpn-server@gw-server", "gw-socks"]
     return jsonify(tun=os.path.exists("/dev/net/tun"), ifaces=ifs, kroutes=rt, routes=state["routes"], errors=state["errors"],
                    vpn=[{"name": v["name"], "up": ifup(vif(v)), "iface": vif(v)} for v in c["vpn_clients"]],
                    services={u: sh("systemctl", "is-active", u)[1] for u in units})
+
+def fw_cancel_timer():
+    t = state.pop("fw_timer", None)
+    if t: t.cancel()
+
+def fw_revert():
+    with lock:
+        if not state.get("fw_cand"): return
+        c = load()
+        try: apply_firewall(c, c["firewall"])
+        except Exception as e: state["errors"] = [f"firewall revert: {e}"]
+        state["fw_cand"] = None; state["fw_deadline"] = None; fw_cancel_timer()
+
+@app.get("/api/firewall")
+def fw_get():
+    c = load(); cand = state.get("fw_cand"); dl = state.get("fw_deadline") or 0
+    return jsonify(config=cand or c["firewall"], pending=max(0, int(dl - time.time())) if cand else 0)
+
+@app.put("/api/firewall")
+def fw_put():
+    d = request.get_json() or {}
+    with lock:
+        c = load()
+        try: fw = validate_fw(d.get("config") or {})
+        except (ValueError, KeyError, TypeError) as e: return jsonify(error=str(e)), 400
+        fw_cancel_timer()
+        try: apply_firewall(c, fw)
+        except Exception as e:
+            try: apply_firewall(c, c["firewall"])  # put the last saved rules back
+            except Exception: pass
+            state["fw_cand"] = None
+            return jsonify(error=f"iptables: {e}"), 500
+        if d.get("safe") and fw["enabled"]:  # applied but not saved: reverts unless confirmed
+            state["fw_cand"] = fw; state["fw_deadline"] = time.time() + 60
+            t = threading.Timer(60, fw_revert); t.daemon = True; t.start(); state["fw_timer"] = t
+            return jsonify(ok=True, pending=60)
+        c["firewall"] = fw; save(c); state["fw_cand"] = None
+        return jsonify(ok=True, pending=0)
+
+@app.post("/api/firewall/confirm")
+def fw_confirm():
+    with lock:
+        cand = state.get("fw_cand")
+        if cand: c = load(); c["firewall"] = cand; save(c); state["fw_cand"] = None; state["fw_deadline"] = None
+        fw_cancel_timer()
+    return jsonify(ok=True)
+
+@app.post("/api/firewall/revert")
+def fw_revert_api(): fw_revert(); return jsonify(ok=True)
+
+@app.get("/api/firewall/raw")
+def fw_raw(): return sh("iptables-save")[1] or "(empty, or iptables is not available)", 200, {"Content-Type": "text/plain"}
 
 if __name__ == "__main__":
     c = load()
@@ -457,8 +706,10 @@ if __name__ == "__main__":
     if "--passwd" in sys.argv:
         c["admin_hash"] = generate_password_hash(getpass.getpass("New password: ")); save(c); sys.exit()
     save(c); app.secret_key = c["secret"]
+    app.config.update(SESSION_COOKIE_SECURE=True)
     threading.Thread(target=loop, daemon=True).start(); threading.Thread(target=sampler, daemon=True).start()
-    h, p = os.environ.get("GW_LISTEN", "0.0.0.0:8080").rsplit(":", 1)
-    try:
-        from waitress import serve; serve(app, host=h, port=int(p))
-    except ImportError: app.run(host=h, port=int(p))
+    h, p = os.environ.get("GW_LISTEN", "0.0.0.0:8443").rsplit(":", 1)
+    cert, key = ensure_web_tls()
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(cert, key)
+    from werkzeug.serving import run_simple
+    run_simple(h, int(p), app, ssl_context=ctx, threaded=True)

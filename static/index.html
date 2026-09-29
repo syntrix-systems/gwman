@@ -2,37 +2,54 @@
 <style>
 :root{--bg:#0f1218;--card:#181d27;--bd:#2a3140;--tx:#d8dee9;--mut:#8792a6;--ac:#4fa3ff;--ok:#3ecf8e;--bad:#ff6b6b}
 *{box-sizing:border-box}body{margin:0;font:14px system-ui,sans-serif;background:var(--bg);color:var(--tx)}
-header{display:flex;align-items:center;padding:0 16px;border-bottom:1px solid var(--bd);background:var(--card);position:sticky;top:0;flex-wrap:wrap}
+header{display:flex;align-items:center;padding:0 16px;border-bottom:1px solid var(--bd);background:var(--card);position:sticky;top:0;z-index:10;flex-wrap:wrap}
+#logo{height:24px;max-width:160px;object-fit:contain;margin-right:10px;display:none}
 header b{margin-right:16px}nav button{background:none;border:0;color:var(--mut);padding:14px 12px;cursor:pointer;font:inherit;border-bottom:2px solid transparent}
-nav button.on{color:var(--tx);border-color:var(--ac)}main{max-width:1000px;margin:20px auto;padding:0 16px}
+nav button.on{color:var(--tx);border-color:var(--ac)}main{max-width:1400px;margin:20px auto;padding:0 16px}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:16px;margin-bottom:16px}h3{margin:0 0 10px}
 table{width:100%;border-collapse:collapse}td,th{padding:6px;text-align:left;border-bottom:1px solid var(--bd)}th{color:var(--mut);font-weight:500}
 input,select,textarea{background:#0f131b;border:1px solid var(--bd);color:var(--tx);border-radius:5px;padding:6px 8px;font:inherit;max-width:100%}
-td input:not([type=checkbox]){width:100%}input[type=checkbox]{width:auto}textarea{width:100%;min-height:110px;font-family:monospace}
+.tgl{position:relative;display:inline-block;width:36px;height:21px;flex:none;vertical-align:middle;contain:layout style paint;overflow:hidden}
+.tgl input[type=checkbox]{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer;z-index:1}
+.tgl i{position:absolute;inset:0;background:#2a3140;border:1px solid var(--bd);border-radius:20px;transition:background .15s;pointer-events:none;display:block}
+.tgl i::before{content:'';position:absolute;top:1px;left:1px;width:17px;height:17px;background:#8792a6;border-radius:50%;transition:transform .15s,background .15s}
+.tgl input:checked ~ i{background:var(--ac);border-color:var(--ac)}
+.tgl input:checked ~ i::before{transform:translateX(15px);background:#04121f}
+label:has(.tgl){display:inline-flex;align-items:center;gap:8px;margin:0;cursor:pointer;color:var(--tx)}
+td:has(.tgl){text-align:center;vertical-align:middle}
+td input:not([type=checkbox]){width:100%}textarea{width:100%;min-height:110px;font-family:monospace}
 button.b{background:var(--ac);color:#04121f;border:0;border-radius:5px;padding:7px 14px;cursor:pointer;font:inherit;margin:4px 4px 0 0}
 button.g{background:#2a3140;color:var(--tx)}button.d{background:#5a2530;color:#ffb3b3}
 .ok{color:var(--ok)}.bad{color:var(--bad)}.mut{color:var(--mut)}label{display:block;margin:8px 0 3px;color:var(--mut)}
-.row{display:flex;gap:12px;flex-wrap:wrap}.row>div{flex:1;min-width:170px}.row input,.row select{width:100%}
+.row{display:flex;gap:12px;flex-wrap:wrap}.row>div{flex:1;min-width:170px}.row input:not([type=checkbox]),.row select{width:100%}
 h2{margin:0 0 4px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin-bottom:16px}
 .tile{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px;overflow:hidden}.tl{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.08em}
 .tv{font-size:26px;font-weight:600;margin:2px 0 8px}.tv small{font-size:13px;color:var(--mut);font-weight:400}.bar{height:7px;background:#0f131b;border-radius:4px;overflow:hidden;margin-top:10px}.bar i{display:block;height:100%;border-radius:4px}
 .chip{display:inline-flex;align-items:center;gap:7px;background:#0f131b;border:1px solid var(--bd);border-radius:20px;padding:5px 12px;margin:0 8px 8px 0}.dot{width:8px;height:8px;border-radius:50%}
 .leg{display:flex;gap:22px;align-items:baseline;flex-wrap:wrap;margin:4px 0 8px}.leg b{font-size:20px}.leg span{color:var(--mut);font-size:12px}
 #msg{position:fixed;bottom:16px;right:16px;padding:10px 14px;border-radius:6px;background:#222b3a;display:none;max-width:420px}
+#busy{position:fixed;inset:0;background:rgba(10,12,18,.35);display:none;align-items:center;justify-content:center;z-index:999}
+#busy .spin{width:34px;height:34px;border-radius:50%;border:3px solid #2a3140;border-top-color:var(--ac);animation:sp .7s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+footer{text-align:center;color:var(--mut);font-size:12px;padding:24px 16px 16px;max-width:1400px;margin:0 auto}footer a{color:var(--ac);text-decoration:none}footer a:hover{text-decoration:underline}
+.pend{background:#3a2f14;border:1px solid #6b5420;border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
 </style></head><body>
-<header><b>GW Manager</b><nav id="nav"></nav></header><main id="main"></main><div id="msg"></div>
+<header><img id=logo src="/api/logo"><b id=brand>GW Manager</b><nav id="nav"></nav></header><main id="main"></main><footer>Built by <a href="https://syntrix.ir" target=_blank rel=noopener>Syntrix Systems</a></footer><div id="msg"></div><div id="busy"><div class="spin"></div></div>
 <script>
 const $=s=>document.querySelector(s),V=id=>document.getElementById(id);let C,S,M,dIf='',tab='dash';
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function msg(t,bad){const m=$('#msg');m.textContent=t;m.style.color=bad?'var(--bad)':'var(--ok)';m.style.display='block';setTimeout(()=>m.style.display='none',5000)}
-async function api(p,m='GET',b){const r=await fetch('/api/'+p,{method:m,headers:{'Content-Type':'application/json','X-Requested-With':'gw'},body:b?JSON.stringify(b):undefined});
- const t=await r.text();let j;try{j=JSON.parse(t)}catch{j=t}if(r.status==401){login();throw 0}if(!r.ok)throw new Error(j.error||t);return j}
+let busyN=0;function busy(d){busyN+=d;V('busy').style.display=busyN>0?'flex':'none'}
+async function api(p,m='GET',b,quiet){if(!quiet)busy(1);try{
+ const r=await fetch('/api/'+p,{method:m,headers:{'Content-Type':'application/json','X-Requested-With':'gw'},body:b?JSON.stringify(b):undefined});
+ const t=await r.text();let j;try{j=JSON.parse(t)}catch{j=t}if(r.status==401){login();throw 0}if(!r.ok)throw new Error(j.error||t);return j
+ }finally{if(!quiet)busy(-1)}}
 async function put(part){try{const r=await api('config','PUT',part);msg(r.errors.length?r.errors.join(' | '):'Applied',r.errors.length);await load()}catch(e){if(e)msg(e.message,1)}}
 function login(){$('#nav').innerHTML='';$('#main').innerHTML=`<div class=card style="max-width:340px;margin:60px auto"><h3>Sign in</h3><input id=pw type=password placeholder=password style="width:100%" onkeydown="if(event.key=='Enter')doLogin()"><button class=b onclick=doLogin()>Sign in</button></div>`}
 async function doLogin(){try{await api('login','POST',{password:V('pw').value});load()}catch(e){if(e)msg(e.message,1)}}
 const f=(id,l,v,t='text',ph='')=>`<div><label>${l}</label><input id="${id}" type="${t}" value="${esc(v)}" placeholder="${ph}"></div>`;
-const chk=(id,l,v)=>`<div><label><input id="${id}" type=checkbox ${v?'checked':''}> ${l}</label></div>`;
-const tabs={dash:['Dashboard',rDash],status:['Status',rStatus],routing:['Routing',rRouting],vpnc:['VPNs & proxies',rVpnc],vpns:['VPN servers',rVpns],set:['Settings',rSet]};
+const chk=(id,l,v)=>`<div><label>&nbsp;</label><label style="display:flex"><span class=tgl><input id="${id}" type=checkbox ${v?'checked':''}><i></i></span> ${l}</label></div>`;
+const tabs={dash:['Dashboard',rDash],status:['Status',rStatus],routing:['Routing',rRouting],vpnc:['VPNs & proxies',rVpnc],vpns:['Servers',rVpns],fw:['Firewall',rFw],set:['Settings',rSet]};
 function draw(){$('#nav').innerHTML=Object.entries(tabs).map(([k,[n]])=>`<button class="${k==tab?'on':''}" onclick="tab='${k}';draw()">${n}</button>`).join('');$('#main').innerHTML=tabs[tab][1]()}
 async function load(){try{[C,S]=await Promise.all([api('config'),api('status')]);draw()}catch(e){}}
 const bits=v=>{v*=8;return v>=1e6?(v/1e6).toFixed(1)+' Mbit/s':v>=1e3?(v/1e3).toFixed(0)+' kbit/s':Math.round(v)+' bit/s'};
@@ -46,7 +63,7 @@ function chart(id,series,{h=70,max}={}){const W=600,n=Math.max(2,...series.map(s
   return`<path d="${l} L${W},${h} L${x(o)},${h} Z" fill="url(#${id}${k})"/><path d="${l}" fill="none" stroke="${s.c}" stroke-width="1.8" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`}).join('');
  return`<svg viewBox="0 0 ${W} ${h}" preserveAspectRatio="none" style="width:100%;height:${h}px;display:block"><defs>${defs}</defs>${grid}${paths}</svg>`}
 function rDash(){setTimeout(loadM,0);return`<div id=dash>${M?dashHtml():'<p class=mut>Loading…</p>'}</div>`}
-async function loadM(){try{M=await api('metrics');const el=V('dash');if(tab=='dash'&&el)el.innerHTML=dashHtml()}catch(e){}}
+async function loadM(q){try{M=await api('metrics',undefined,undefined,q);const el=V('dash');if(tab=='dash'&&el)el.innerHTML=dashHtml()}catch(e){}}
 function dashHtml(){const H=M.hist,L=H[H.length-1]||{cpu:0,mem:0},ifs=Object.keys(M.totals);
  if(!ifs.includes(dIf))dIf=ifs.find(i=>!/^(ovpn|l2tp|px|ppp|tun)/.test(i))||ifs[0]||'';
  const rx=H.map(s=>(s.net[dIf]||[0,0])[0]),tx=H.map(s=>(s.net[dIf]||[0,0])[1]),tot=M.totals[dIf]||[0,0];
@@ -78,12 +95,12 @@ function rStatus(){return `${S.tun===false?`<div class=card><h3 class=bad>/dev/n
 function tpOpts(sel){return C.vpn_clients.map(v=>`<option value="vpn:${v.name}" ${sel==='vpn:'+v.name?'selected':''}>via ${v.type=='openvpn'||v.type=='l2tp'?'VPN':'proxy'}: ${v.name}</option>`).join('')+
 `<option value=gateway ${sel==='gateway'?'selected':''}>via gateway IP</option><option value=blackhole ${sel==='blackhole'?'selected':''}>blackhole (drop)</option>`}
 function routeRow(r,i){const sel=r.type=='vpn'?'vpn:'+r.vpn:r.type,s=(S.routes||[])[i]||'';
-return `<tr><td><input type=checkbox class=en ${r.enabled!==false?'checked':''}><td><input class=cidr value="${esc(r.cidr)}" placeholder="10.0.0.0/8"><td><select class=tp>${tpOpts(sel)}</select>
+return `<tr><td><span class=tgl><input type=checkbox class=en ${r.enabled!==false?'checked':''}><i></i></span><td><input class=cidr value="${esc(r.cidr)}" placeholder="10.0.0.0/8"><td><select class=tp>${tpOpts(sel)}</select>
 <td><input class=gw value="${esc(r.gw||'')}" placeholder="gateway IP"><td><input class=mt type=number min=1 max=65535 value="${r.metric??1}" style="width:72px">
 <td><input class=cm value="${esc(r.comment||'')}" placeholder="comment">
 <td class="${s=='active'?'ok':s=='disabled'?'mut':'bad'}">${esc(s)}<td><button class="b d" onclick="this.closest('tr').remove()">✕</button>`}
 function rRouting(){return `<div class=card><h3>Routing</h3><p class=mut>Send traffic for a destination through a VPN tunnel or a specific gateway. Longest prefix wins; <code>0.0.0.0/0</code> means everything (installed as two /1 routes, endpoints of your VPN servers are kept on the normal uplink). Everything not listed uses the system default route. <b>Distance</b> (1-65535, lower wins) lets you list the same destination more than once for failover: e.g. VPN A at 10, VPN B at 20. If a tunnel is down its rule is skipped and the next distance takes over (gateway rules have no health check).</p>
-<table id=rt><tr><th><th>Destination CIDR<th>Send via<th>Gateway IP<th>Distance<th>Comment<th>Status<th></tr>${C.routes.map(routeRow).join('')}</table>
+<div class=scroll><table id=rt><tr><th><th>Destination CIDR<th>Send via<th>Gateway IP<th>Distance<th>Comment<th>Status<th></tr>${C.routes.map(routeRow).join('')}</table></div>
 <button class="b g" onclick="addRoute()">+ Add rule</button><button class=b onclick="saveRoutes()">Save &amp; apply</button></div>`}
 function addRoute(){$('#rt').insertAdjacentHTML('beforeend',routeRow({cidr:'',type:C.vpn_clients.length?'vpn':'gateway',vpn:(C.vpn_clients[0]||{}).name},-1))}
 function saveRoutes(){const routes=[...document.querySelectorAll('#rt tr')].slice(1).map(tr=>{const t=tr.querySelector('.tp').value,q=s=>tr.querySelector(s);
@@ -108,7 +125,7 @@ function togVpn(i){C.vpn_clients[i].enabled=!C.vpn_clients[i].enabled;put({vpn_c
 function delVpn(i){const n=C.vpn_clients[i].name;if(!confirm('Delete '+n+'? Routes using it must be removed first.'))return;
  put({routes:C.routes.filter(r=>r.vpn!=n),vpn_clients:C.vpn_clients.filter((_,j)=>j!=i)})}
 
-function rVpns(){const o=C.ovpn_server,l=C.l2tp_server;return `<div class=card><h3>OpenVPN server</h3><div class=row>${chk('oe','Enabled',o.enabled)}${f('op','Port',o.port,'number')}
+function rVpns(){const o=C.ovpn_server,l=C.l2tp_server,k=C.socks_server;return `<div class=card><h3>OpenVPN server</h3><div class=row>${chk('oe','Enabled',o.enabled)}${f('op','Port',o.port,'number')}
 <div><label>Protocol</label><select id=opr><option ${o.proto=='udp'?'selected':''}>udp</option><option ${o.proto=='tcp'?'selected':''}>tcp</option></select></div>${f('os','Tunnel subnet',o.subnet)}</div>
 <div class=row>${f('oh','Public host/IP (put in client profiles)',o.public_host)}${f('opu','Push routes (comma-sep CIDRs, e.g. your LAN)',o.push_routes.join(', '))}${f('od','Push DNS',o.dns)}${chk('orr','Redirect all client traffic',o.redirect)}</div>
 <button class=b onclick=saveO()>Save &amp; apply</button>
@@ -116,7 +133,10 @@ function rVpns(){const o=C.ovpn_server,l=C.l2tp_server;return `<div class=card><
 <div class=row>${f('on','New client name','')}<div><label>&nbsp;</label><button class=b onclick=addO()>Create profile</button></div></div></div>
 <div class=card><h3>L2TP/IPsec server</h3><div class=row>${chk('le','Enabled',l.enabled)}${f('lpsk','IPsec PSK',l.psk,'password')}${f('lli','Server tunnel IP',l.local_ip)}${f('lpo','Client IP pool',l.pool)}${f('ld','DNS for clients',l.dns)}</div>
 <label>Users (one <code>username:password</code> per line)</label><textarea id=lus>${esc(l.users.map(u=>u.username+':'+u.password).join('\n'))}</textarea>
-<button class=b onclick=saveL()>Save &amp; apply</button><p class=mut>Manages /etc/ppp/chap-secrets. Allow UDP 500, 4500 and 1701 to this host (from the internet side).</p></div>`}
+<button class=b onclick=saveL()>Save &amp; apply</button><p class=mut>Manages /etc/ppp/chap-secrets. Allow UDP 500, 4500 and 1701 to this host (from the internet side).</p></div>
+<div class=card><h3>SOCKS5 proxy (inbound)</h3><div class=row>${chk('ke','Enabled',k.enabled)}${f('kl','Listen address (127.0.0.1, your LAN IP, or 0.0.0.0)',k.listen)}${f('kp','Port',k.port,'number')}${f('ku','Username',k.username)}${f('kw','Password',k.password,'password')}</div>
+<button class=b onclick=saveK()>Save &amp; apply</button><p class=mut>Runs microsocks. Connections leave through this box's routing table, so the rules in the Routing tab decide which tunnel or proxy each destination uses. A listener that isn't 127.0.0.1 requires a username and password. Don't expose it to the internet.</p></div>`}
+function saveK(){put({socks_server:{enabled:V('ke').checked,listen:V('kl').value,port:V('kp').value,username:V('ku').value,password:V('kw').value}})}
 function saveO(){put({ovpn_server:{enabled:V('oe').checked,port:V('op').value,proto:V('opr').value,subnet:V('os').value,public_host:V('oh').value,
  push_routes:V('opu').value.split(',').map(s=>s.trim()).filter(Boolean),dns:V('od').value,redirect:V('orr').checked}})}
 async function addO(){try{await api('ovpn/client','POST',{name:V('on').value});msg('Created');load()}catch(e){if(e)msg(e.message,1)}}
@@ -124,9 +144,64 @@ async function delO(n){if(confirm('Delete profile '+n+'?')){await api('ovpn/clie
 function saveL(){put({l2tp_server:{enabled:V('le').checked,psk:V('lpsk').value,local_ip:V('lli').value,pool:V('lpo').value,dns:V('ld').value,
  users:V('lus').value.split('\n').map(s=>s.trim()).filter(Boolean).map(s=>{const i=s.indexOf(':');return{username:s.slice(0,i),password:s.slice(i+1)}})}})}
 
+const FWACT={filter:['ACCEPT','DROP','REJECT','LOG','RETURN'],nat:['ACCEPT','RETURN','DNAT','SNAT','MASQUERADE','REDIRECT']};
+const FWCH={filter:['INPUT','FORWARD','OUTPUT'],nat:['PREROUTING','POSTROUTING','OUTPUT']};
+let FW=null,fwPend=0,fwTimer=null;
+async function loadFw(){FW=(await api('firewall')).config;fwPend=(await api('firewall',undefined,undefined,1)).pending||0}
+function fwRow(r){const tbl=r.table||'filter';
+ return `<tr><td><span class=tgl><input type=checkbox class=fe ${r.enabled!==false?'checked':''}><i></i></span>
+<td><select class=ft onchange="fwRetype(this)"><option value=filter ${tbl=='filter'?'selected':''}>filter</option><option value=nat ${tbl=='nat'?'selected':''}>nat</option></select>
+<td><select class=fch>${FWCH[tbl].map(c=>`<option ${r.chain==c?'selected':''}>${c}</option>`).join('')}</select>
+<td><select class=fac>${FWACT[tbl].map(a=>`<option ${r.action==a?'selected':''}>${a}</option>`).join('')}</select>
+<td><select class=fpr><option value=any ${!r.proto||r.proto=='any'?'selected':''}>any</option><option ${r.proto=='tcp'?'selected':''}>tcp</option><option ${r.proto=='udp'?'selected':''}>udp</option><option ${r.proto=='icmp'?'selected':''}>icmp</option></select>
+<td><input class=fsrc value="${esc(r.src||'')}" placeholder=any style="width:110px">
+<td><input class=fdst value="${esc(r.dst||'')}" placeholder=any style="width:110px">
+<td><input class=fsp value="${esc(r.sport||'')}" placeholder="" style="width:70px">
+<td><input class=fdp value="${esc(r.dport||'')}" placeholder="" style="width:70px">
+<td><input class=fiif value="${esc(r.iif||'')}" placeholder="" style="width:70px">
+<td><input class=foif value="${esc(r.oif||'')}" placeholder="" style="width:70px">
+<td><input class=fto value="${esc(r.to||'')}" placeholder="" style="width:110px">
+<td><input class=fcm value="${esc(r.comment||'')}" style="width:100px">
+<td><button class="b d" onclick="this.closest('tr').remove()">✕</button>`}
+function fwRetype(sel){const tr=sel.closest('tr'),tbl=sel.value;
+ tr.querySelector('.fch').innerHTML=FWCH[tbl].map(c=>`<option>${c}</option>`).join('');
+ tr.querySelector('.fac').innerHTML=FWACT[tbl].map(a=>`<option>${a}</option>`).join('')}
+function rFw(){setTimeout(async()=>{if(!FW){await loadFw();draw()}},0);
+ if(!FW)return '<p class=mut>Loading…</p>';
+ const pol=x=>`<option value=keep ${FW.policy[x]=='keep'?'selected':''}>leave as-is</option><option value=ACCEPT ${FW.policy[x]=='ACCEPT'?'selected':''}>ACCEPT</option><option value=DROP ${FW.policy[x]=='DROP'?'selected':''}>DROP</option>`;
+ return `${fwPend>0?`<div class=pend><span>Firewall applied — reverting in <b id=fwct>${fwPend}</b>s unless confirmed.</span><span><button class=b onclick=fwConfirm()>Keep it</button><button class="b g" onclick=fwRevertNow()>Revert now</button></span></div>`:''}
+<div class=card><h3>Firewall</h3>${chk('fwen','Enabled',FW.enabled)}
+<div class=row style="margin-top:8px"><div><label>INPUT policy</label><select id=fwpi>${pol('INPUT')}</select></div><div><label>FORWARD policy</label><select id=fwpf>${pol('FORWARD')}</select></div><div><label>OUTPUT policy</label><select id=fwpo>${pol('OUTPUT')}</select></div>
+${f('fwkp','Always-allow TCP ports (comma-sep, e.g. 22,443)',FW.keep_ports)}</div>
+<p class=mut>Setting a policy to DROP always keeps loopback, established connections, and the ports above open on this box, so you can't lock yourself out. Rules below run before the policy.</p>
+<table id=fwt><tr><th><th>Table<th>Chain<th>Action<th>Proto<th>Src<th>Dst<th>Sport<th>Dport<th>In if<th>Out if<th>To<th>Comment<th></tr>${FW.rules.map(fwRow).join('')}</table>
+<button class="b g" onclick="addFwRow()">+ Add rule</button><button class=b onclick="saveFw()">Test &amp; apply (60s safety)</button>
+<a href="/api/firewall/raw" target=_blank style="margin-left:8px;color:var(--ac)">View raw iptables-save</a>
+<p class=mut>A save is applied immediately but reverts automatically after 60 seconds unless you click "Keep it" — so a rule that locks you out undoes itself.</p></div>`}
+function addFwRow(){$('#fwt').insertAdjacentHTML('beforeend',fwRow({table:'filter',chain:'INPUT',action:'ACCEPT'}))}
+async function saveFw(){const rules=[...document.querySelectorAll('#fwt tr')].slice(1).map(tr=>{const q=s=>tr.querySelector(s);
+ return{enabled:q('.fe').checked,table:q('.ft').value,chain:q('.fch').value,action:q('.fac').value,proto:q('.fpr').value,src:q('.fsrc').value,dst:q('.fdst').value,
+ sport:q('.fsp').value,dport:q('.fdp').value,iif:q('.fiif').value,oif:q('.foif').value,to:q('.fto').value,comment:q('.fcm').value}});
+ const config={enabled:V('fwen').checked,policy:{INPUT:V('fwpi').value,FORWARD:V('fwpf').value,OUTPUT:V('fwpo').value},keep_ports:V('fwkp').value,rules};
+ try{const r=await api('firewall','PUT',{config,safe:true});fwPend=r.pending||0;FW=config;msg(fwPend?'Applied — confirm within 60s':'Applied');draw();fwPoll()}catch(e){if(e)msg(e.message,1)}}
+async function fwPoll(){clearTimeout(fwTimer);if(fwPend<=0)return;const el=V('fwct');if(el)el.textContent=fwPend;fwPend--;fwTimer=setTimeout(async()=>{
+ if(fwPend<=0){try{const r=await api('firewall',undefined,undefined,1);fwPend=r.pending||0;if(fwPend<=0){msg('Reverted (not confirmed in time)',1);FW=r.config;draw()}}catch(e){}}
+ fwPoll()},1000)}
+async function fwConfirm(){await api('firewall/confirm','POST');fwPend=0;msg('Kept');draw()}
+async function fwRevertNow(){await api('firewall/revert','POST');const r=await api('firewall');FW=r.config;fwPend=0;msg('Reverted',1);draw()}
+async function upLogo(){const f=V('logof').files[0];if(!f)return msg('choose a file first',1);
+ const fd=new FormData();fd.append('file',f);busy(1);
+ try{const r=await fetch('/api/logo',{method:'POST',headers:{'X-Requested-With':'gw'},body:fd});const j=await r.json();
+  if(!r.ok)throw new Error(j.error||'upload failed');
+  V('logo').src='/api/logo?'+Date.now();msg('Logo updated')}catch(e){msg(e.message,1)}finally{busy(-1)}}
+async function rmLogo(){await api('logo','DELETE');V('logo').removeAttribute('src');V('logo').style.display='none';V('brand').style.display='';msg('Reset')}
 function rSet(){return `<div class=card><h3>NAT / LAN</h3>${f('lan','LAN interfaces (comma-separated, e.g. eth1)',C.lan_ifaces.join(', '))}${chk('nat','Masquerade LAN and VPN-server clients when leaving via any other interface',C.nat)}
 <button class=b onclick="put({lan_ifaces:V('lan').value.split(',').map(s=>s.trim()).filter(Boolean),nat:V('nat').checked})">Save &amp; apply</button>
 <p class=mut>IPv4 forwarding is always enabled. Interface IPs and the default route are managed by you (ifupdown/netplan/systemd-networkd), not by this tool.</p></div>
+<div class=card><h3>Branding</h3><p class=mut style="margin-top:0">PNG, SVG, JPEG or WEBP, max 1&nbsp;MB. Replaces the "GW Manager" text in the header for everyone.</p>
+<input type=file id=logof accept="image/png,image/svg+xml,image/jpeg,image/webp,image/x-icon">
+<button class=b onclick=upLogo()>Upload</button><button class="b g" onclick=rmLogo()>Reset to default</button></div>
 <div class=card><h3>Admin password</h3>${f('np','New password (min 8)','','password')}<button class=b onclick="api('password','POST',{password:V('np').value}).then(()=>msg('Changed')).catch(e=>e&&msg(e.message,1))">Change</button></div>`}
-load();setInterval(()=>{if(!C)return;if(tab=='dash'){api('status').then(s=>S=s).catch(()=>{});loadM()}else if(tab=='status')api('status').then(s=>{S=s;if(tab=='status')draw()}).catch(()=>{})},5000);
+(function(){const im=V('logo');im.onload=()=>{im.style.display='block';V('brand').style.display='none'};im.onerror=()=>{im.style.display='none';V('brand').style.display=''}})();
+load();setInterval(()=>{if(!C)return;if(tab=='dash'){api('status',undefined,undefined,1).then(s=>S=s).catch(()=>{});loadM(1)}else if(tab=='status')api('status',undefined,undefined,1).then(s=>{S=s;if(tab=='status')draw()}).catch(()=>{})},5000);
 </script></body></html>

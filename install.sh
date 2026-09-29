@@ -3,7 +3,8 @@
 set -e
 [ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-flask python3-waitress iproute2 nftables openvpn openssl strongswan-starter xl2tpd ppp curl unzip ca-certificates
+DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-flask python3-waitress iproute2 nftables openvpn openssl strongswan-starter xl2tpd ppp curl unzip ca-certificates iptables
+apt-get install -y microsocks || echo 'WARNING: microsocks package not available - inbound SOCKS disabled'
 # tun2socks (outbound SOCKS5/HTTP/Shadowsocks proxies)
 case "$(dpkg --print-architecture)" in arm64) A=arm64;; amd64) A=amd64;; armhf) A=armv7;; *) A="";; esac
 if [ -n "$A" ] && [ ! -x /usr/local/bin/tun2socks ]; then
@@ -25,5 +26,5 @@ systemctl disable --now xl2tpd strongswan-starter 2>/dev/null || true   # gwmana
 PW=$(python3 /opt/gwmanager/app.py --init)
 cp gwmanager.service /etc/systemd/system/
 systemctl daemon-reload; systemctl enable gwmanager; systemctl restart gwmanager
-echo; echo "GW Manager is running on http://<this-host>:8080"
+echo; echo "GW Manager is running on https://<this-host>:8443 (self-signed certificate -- your browser will warn once)"
 [ -n "$PW" ] && echo "Admin password: $PW   (change it in Settings, or: python3 /opt/gwmanager/app.py --passwd)"
