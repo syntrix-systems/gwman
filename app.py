@@ -13,7 +13,7 @@ PROTO = "77"  # routes we own are tagged "proto 77"
 NAME = re.compile(r"^[a-z][a-z0-9]{0,7}$")
 IFN = re.compile(r"^[\w.\-]{1,15}$")
 lock = threading.RLock()
-state = {"routes": [], "errors": [], "attempt": {}}
+state = {"routes": [], "errors": [], "attempt": {}, "vpn_since": {}}
 PROXY = ("socks5", "http", "shadowsocks")
 CIPHERS = ("chacha20-ietf-poly1305", "aes-256-gcm", "aes-128-gcm")
 IKE = "aes256-sha1-modp2048,aes128-sha1-modp2048,aes256-sha1-modp1024,aes128-sha1-modp1024,3des-sha1-modp1024!"
@@ -23,6 +23,7 @@ DEFAULT = {"admin_hash": "", "secret": "", "lan_ifaces": [], "nat": True, "vpn_c
                            "push_routes": [], "dns": "", "redirect": False, "clients": []},
            "firewall": {"enabled": False, "policy": {"INPUT": "keep", "FORWARD": "keep", "OUTPUT": "keep"}, "keep_ports": "22", "rules": []},
            "socks_server": {"enabled": False, "listen": "127.0.0.1", "port": 1080, "username": "", "password": ""},
+           "ss_server": {"enabled": False, "port": 8388, "password": "", "cipher": "chacha20-ietf-poly1305", "public_host": ""},
            "l2tp_server": {"enabled": False, "psk": "", "local_ip": "10.9.0.1", "pool": "10.9.0.10-10.9.0.100",
                            "dns": "", "users": []}}
 
@@ -104,6 +105,20 @@ def validate(c):
     for x in (k["username"], k["password"]):
         if x and not re.match(r"^[^\s\"'\\%$]+$", x): raise ValueError("SOCKS credentials: no spaces or quotes, backslash, % or $")
     if bool(k["username"]) != bool(k["password"]): raise ValueError("SOCKS: set both username and password, or neither")
+    z = c["ss_server"]; z["port"] = int(z["port"])
+    if not 0 < z["port"] < 65536: raise ValueError("bad Shadowsocks port")
+    if z.get("cipher") not in CIPHERS: raise ValueError("bad Shadowsocks cipher")
+    safe(z.get("password", ""), "Shadowsocks password"); safe(z.get("public_host", ""), "Shadowsocks host")
+    if z["enabled"] and not z["password"]: raise ValueError("Shadowsocks server needs a password")
+
+def vpn_info(c):
+    now = time.time(); out = []
+    for v in c["vpn_clients"]:
+        up = ifup(vif(v)); key = v["name"]
+        if up: state["vpn_since"].setdefault(key, now)
+        else: state["vpn_since"].pop(key, None)
+        out.append({"name": v["name"], "up": up, "iface": vif(v), "since": state["vpn_since"].get(key)})
+    return out
 
 def ifup(n):
     rc, o = sh("ip", "-j", "link", "show", "dev", n)
@@ -232,6 +247,18 @@ def sync_socks(c):
     sh("systemctl", "enable", "--now", u)
     if ch: sh("systemctl", "restart", u)
 
+def sync_ss_server(c):
+    z = c["ss_server"]; u = "gw-ssserver.service"
+    if not z["enabled"]: sh("systemctl", "disable", "--now", u); return
+    bin_ = shutil.which("ss-server")
+    if not bin_: raise RuntimeError("shadowsocks-libev is not installed (apt install shadowsocks-libev)")
+    ch = wr(f"/etc/systemd/system/{u}", f"[Unit]\nDescription=GW Shadowsocks inbound\nAfter=network-online.target\n\n[Service]\n"
+            f'ExecStart={bin_} -s 0.0.0.0 -p {z["port"]} -k "{z["password"]}" -m {z["cipher"]}\n'
+            "DynamicUser=yes\nAmbientCapabilities=CAP_NET_BIND_SERVICE\nNoNewPrivileges=yes\nRestart=always\nRestartSec=3\n\n[Install]\nWantedBy=multi-user.target\n")
+    if ch: sh("systemctl", "daemon-reload")
+    sh("systemctl", "enable", "--now", u)
+    if ch: sh("systemctl", "restart", u)
+
 # ---------------- OpenVPN server + PKI ----------------
 def issue(cn, eku):
     p = lambda e: os.path.join(PKI, f"{cn}.{e}")
@@ -355,7 +382,7 @@ def apply_routes(c):
 def reconcile(c):
     errs = []
     sh("sysctl", "-qw", "net.ipv4.ip_forward=1", "net.ipv4.conf.all.rp_filter=2", "net.ipv4.conf.default.rp_filter=2")
-    for f in (sync_ovpn_clients, sync_l2tp, sync_proxies, sync_socks, sync_ovpn_server, apply_nft, apply_firewall, apply_routes):
+    for f in (sync_ovpn_clients, sync_l2tp, sync_proxies, sync_socks, sync_ss_server, sync_ovpn_server, apply_nft, apply_firewall, apply_routes):
         try: f(c)
         except Exception as e: errs.append(f"{f.__name__}: {e}")
     state["errors"] = errs
@@ -582,7 +609,7 @@ def put_config():
     d = request.get_json() or {}
     with lock:
         c = load()
-        for k in ("lan_ifaces", "nat", "vpn_clients", "routes", "l2tp_server", "socks_server"):
+        for k in ("lan_ifaces", "nat", "vpn_clients", "routes", "l2tp_server", "socks_server", "ss_server"):
             if k in d: c[k] = d[k]
         if "ovpn_server" in d: c["ovpn_server"].update({k: v for k, v in d["ovpn_server"].items() if k != "clients"})
         try: validate(c)
@@ -631,6 +658,14 @@ def vpn_log(n):
     units = {"openvpn": [f"openvpn-client@gwc-{n}"], "l2tp": ["xl2tpd", "strongswan-starter"]}.get(v["type"], [f"gwp-{n}"])
     return sh("journalctl", "--no-pager", "-n", "60", *[a for u in units for a in ("-u", u)])[1] or "(no log lines)", 200, {"Content-Type": "text/plain"}
 
+@app.post("/api/qr")
+def qr():
+    text = (request.get_json() or {}).get("text", "")
+    if not text or len(text) > 2000: return jsonify(error="bad input"), 400
+    p = subprocess.run(["qrencode", "-t", "SVG", "-o", "-", "-s", "4", "--", text], capture_output=True, text=True)
+    if p.returncode: return jsonify(error="qrencode is not installed (apt install qrencode)"), 500
+    return jsonify(svg=p.stdout)
+
 @app.get("/api/status")
 def status():
     c = load(); ifs = []
@@ -639,9 +674,9 @@ def status():
         ifs.append({"name": i["ifname"], "state": i.get("operstate", ""), "addrs": [f"{a['local']}/{a['prefixlen']}" for a in i.get("addr_info", []) if a["family"] == "inet"]})
     rc, o = sh("ip", "-j", "-4", "route", "show")
     rt = [{"dst": r["dst"], "via": r.get("gateway", ""), "dev": r.get("dev", ""), "proto": r.get("protocol", "")} for r in json.loads(o or "[]")]
-    units = ["strongswan-starter", "xl2tpd", "openvpn-server@gw-server", "gw-socks"]
+    units = ["strongswan-starter", "xl2tpd", "openvpn-server@gw-server", "gw-socks", "gw-ssserver"]
     return jsonify(tun=os.path.exists("/dev/net/tun"), ifaces=ifs, kroutes=rt, routes=state["routes"], errors=state["errors"],
-                   vpn=[{"name": v["name"], "up": ifup(vif(v)), "iface": vif(v)} for v in c["vpn_clients"]],
+                   vpn=vpn_info(c),
                    services={u: sh("systemctl", "is-active", u)[1] for u in units})
 
 def fw_cancel_timer():

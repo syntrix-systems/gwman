@@ -32,6 +32,7 @@ h2{margin:0 0 4px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minma
 #busy .spin{width:34px;height:34px;border-radius:50%;border:3px solid #2a3140;border-top-color:var(--ac);animation:sp .7s linear infinite}
 @keyframes sp{to{transform:rotate(360deg)}}
 footer{text-align:center;color:var(--mut);font-size:12px;padding:24px 16px 16px;max-width:1400px;margin:0 auto}footer a{color:var(--ac);text-decoration:none}footer a:hover{text-decoration:underline}
+#zqr svg{width:100%!important;height:100%!important;display:block}
 .pend{background:#3a2f14;border:1px solid #6b5420;border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
 </style></head><body>
 <header><img id=logo src="/api/logo"><b id=brand>GW Manager</b><nav id="nav"></nav></header><main id="main"></main><footer>Built by <a href="https://syntrix.ir" target=_blank rel=noopener>Syntrix Systems</a></footer><div id="msg"></div><div id="busy"><div class="spin"></div></div>
@@ -106,9 +107,9 @@ function addRoute(){$('#rt').insertAdjacentHTML('beforeend',routeRow({cidr:'',ty
 function saveRoutes(){const routes=[...document.querySelectorAll('#rt tr')].slice(1).map(tr=>{const t=tr.querySelector('.tp').value,q=s=>tr.querySelector(s);
  return{enabled:q('.en').checked,cidr:q('.cidr').value,type:t.startsWith('vpn:')?'vpn':t,vpn:t.startsWith('vpn:')?t.slice(4):undefined,gw:q('.gw').value,metric:q('.mt').value,comment:q('.cm').value}});put({routes})}
 
-function rVpnc(){return `<div class=card><h3>Outbound VPNs &amp; proxies</h3><table><tr><th>Name<th>Type<th>Interface<th>State<th></tr>
-${C.vpn_clients.map((v,i)=>`<tr><td>${v.name}<td>${v.type}<td>${({openvpn:'ovpn-',l2tp:'l2tp-'})[v.type]||'px-'}${v.name}<td>${st((S.vpn.find(x=>x.name==v.name)||{}).up)}
-<td><button class="b g" onclick="showLog('${v.name}')">Log</button><button class="b g" onclick="togVpn(${i})">${v.enabled?'Disconnect':'Connect'}</button><button class="b d" onclick="delVpn(${i})">Delete</button>`).join('')||'<tr><td class=mut>none yet'}</table></div>
+function rVpnc(){return `<div class=card><h3>Outbound VPNs &amp; proxies</h3><table><tr><th>Name<th>Type<th>Interface<th>State<th>Uptime<th></tr>
+${C.vpn_clients.map((v,i)=>{const info=S.vpn.find(x=>x.name==v.name)||{};return `<tr><td>${v.name}<td>${v.type}<td>${({openvpn:'ovpn-',l2tp:'l2tp-'})[v.type]||'px-'}${v.name}<td>${st(info.up)}<td>${info.up&&info.since?dur(Date.now()/1000-info.since):'—'}
+<td><button class="b g" onclick="showLog('${v.name}')">Log</button><button class="b g" onclick="togVpn(${i})">${v.enabled?'Disconnect':'Connect'}</button><button class="b d" onclick="delVpn(${i})">Delete</button>`}).join('')||'<tr><td class=mut>none yet'}</table></div>
 <div class=card id=lgc hidden><h3>Log</h3><pre id=lg style="white-space:pre-wrap;max-height:400px;overflow:auto;margin:0"></pre></div>
 <div class=card><h3>Add VPN or proxy</h3><div class=row>${f('vn','Name (a-z0-9, max 8)','')}<div><label>Type</label><select id=vt onchange="vtc()"><option value=openvpn>OpenVPN</option><option value=l2tp>L2TP/IPsec (PSK)</option><option value=socks5>SOCKS5 proxy</option><option value=http>HTTP proxy</option><option value=shadowsocks>Shadowsocks</option></select></div></div>
 <div id=fo><label>Paste .ovpn profile</label><textarea id=vo></textarea><div class=row>${f('vou','Username (optional)','')}${f('vop','Password','','password')}</div></div>
@@ -125,7 +126,7 @@ function togVpn(i){C.vpn_clients[i].enabled=!C.vpn_clients[i].enabled;put({vpn_c
 function delVpn(i){const n=C.vpn_clients[i].name;if(!confirm('Delete '+n+'? Routes using it must be removed first.'))return;
  put({routes:C.routes.filter(r=>r.vpn!=n),vpn_clients:C.vpn_clients.filter((_,j)=>j!=i)})}
 
-function rVpns(){const o=C.ovpn_server,l=C.l2tp_server,k=C.socks_server;return `<div class=card><h3>OpenVPN server</h3><div class=row>${chk('oe','Enabled',o.enabled)}${f('op','Port',o.port,'number')}
+function rVpns(){const o=C.ovpn_server,l=C.l2tp_server,k=C.socks_server,z=C.ss_server;setTimeout(renderZQR,0);return `<div class=card><h3>OpenVPN server</h3><div class=row>${chk('oe','Enabled',o.enabled)}${f('op','Port',o.port,'number')}
 <div><label>Protocol</label><select id=opr><option ${o.proto=='udp'?'selected':''}>udp</option><option ${o.proto=='tcp'?'selected':''}>tcp</option></select></div>${f('os','Tunnel subnet',o.subnet)}</div>
 <div class=row>${f('oh','Public host/IP (put in client profiles)',o.public_host)}${f('opu','Push routes (comma-sep CIDRs, e.g. your LAN)',o.push_routes.join(', '))}${f('od','Push DNS',o.dns)}${chk('orr','Redirect all client traffic',o.redirect)}</div>
 <button class=b onclick=saveO()>Save &amp; apply</button>
@@ -135,8 +136,24 @@ function rVpns(){const o=C.ovpn_server,l=C.l2tp_server,k=C.socks_server;return `
 <label>Users (one <code>username:password</code> per line)</label><textarea id=lus>${esc(l.users.map(u=>u.username+':'+u.password).join('\n'))}</textarea>
 <button class=b onclick=saveL()>Save &amp; apply</button><p class=mut>Manages /etc/ppp/chap-secrets. Allow UDP 500, 4500 and 1701 to this host (from the internet side).</p></div>
 <div class=card><h3>SOCKS5 proxy (inbound)</h3><div class=row>${chk('ke','Enabled',k.enabled)}${f('kl','Listen address (127.0.0.1, your LAN IP, or 0.0.0.0)',k.listen)}${f('kp','Port',k.port,'number')}${f('ku','Username',k.username)}${f('kw','Password',k.password,'password')}</div>
-<button class=b onclick=saveK()>Save &amp; apply</button><p class=mut>Runs microsocks. Connections leave through this box's routing table, so the rules in the Routing tab decide which tunnel or proxy each destination uses. A listener that isn't 127.0.0.1 requires a username and password. Don't expose it to the internet.</p></div>`}
+<button class=b onclick=saveK()>Save &amp; apply</button><p class=mut>Runs microsocks. Connections leave through this box's routing table, so the rules in the Routing tab decide which tunnel or proxy each destination uses. A listener that isn't 127.0.0.1 requires a username and password. Don't expose it to the internet.</p></div>
+<div class=card><h3>Shadowsocks server (inbound)</h3><div class=row>${chk('ze','Enabled',z.enabled)}${f('zp','Port',z.port,'number')}${f('zpw','Password',z.password,'password')}<div><label>Cipher</label><select id=zc><option ${z.cipher=='chacha20-ietf-poly1305'?'selected':''}>chacha20-ietf-poly1305</option><option ${z.cipher=='aes-256-gcm'?'selected':''}>aes-256-gcm</option><option ${z.cipher=='aes-128-gcm'?'selected':''}>aes-128-gcm</option></select></div>${f('zh','Public host/IP (used in the ss:// link)',z.public_host)}</div>
+<button class=b onclick=saveZ()>Save &amp; apply</button>
+<div id=zqr style="margin-top:14px"></div>
+<p class=mut>Runs ss-server (shadowsocks-libev). Anyone with the link or QR code can use this box as their exit, so keep the password private.</p></div>`}
 function saveK(){put({socks_server:{enabled:V('ke').checked,listen:V('kl').value,port:V('kp').value,username:V('ku').value,password:V('kw').value}})}
+function ssLink(z){if(!z.enabled||!z.password)return null;const host=z.public_host||location.hostname;
+ const b64=btoa(unescape(encodeURIComponent(z.cipher+':'+z.password))).replace(/=+$/,'');
+ return `ss://${b64}@${host}:${z.port}#${encodeURIComponent(host)}`}
+async function renderZQR(){const z=C.ss_server,link=ssLink(z),el=V('zqr');if(!el)return;
+ if(!link){el.innerHTML='<p class=mut>Set a password and enable to see the QR code and link.</p>';return}
+ el.innerHTML='<p class=mut>Loading QR…</p>';
+ try{const r=await api('qr','POST',{text:link},1);
+  const svg=r.svg.replace(/<svg[^>]*/,m=>m.replace(/\s(width|height)="[^"]*"/g,''));
+  el.innerHTML=`<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center"><div style="background:#fff;padding:8px;border-radius:8px;width:150px;height:150px;flex:none">${svg}</div>
+<div style="flex:1;min-width:240px"><label>ss:// link</label><input readonly value="${esc(link)}" onclick="this.select()" style="width:100%"><button class="b g" style="margin-top:6px" onclick="navigator.clipboard.writeText(${JSON.stringify(link)});msg('Copied')">Copy link</button></div></div>`
+ }catch(e){el.innerHTML=`<p class=bad>${esc(e.message)}</p>`}}
+function saveZ(){put({ss_server:{enabled:V('ze').checked,port:V('zp').value,password:V('zpw').value,cipher:V('zc').value,public_host:V('zh').value}})}
 function saveO(){put({ovpn_server:{enabled:V('oe').checked,port:V('op').value,proto:V('opr').value,subnet:V('os').value,public_host:V('oh').value,
  push_routes:V('opu').value.split(',').map(s=>s.trim()).filter(Boolean),dns:V('od').value,redirect:V('orr').checked}})}
 async function addO(){try{await api('ovpn/client','POST',{name:V('on').value});msg('Created');load()}catch(e){if(e)msg(e.message,1)}}

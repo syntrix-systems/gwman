@@ -2,15 +2,26 @@
 
 This project was originally designed to convert a single board computer with limited specs running Debian into a router to manage VPN connections and routing settings for them. It has been tested on Debian 12 but should work on other newer versions as well.
 ---
+
+## Quick Installation
+
+Copy and paste the following command
+```bash
+apt install git -y && git clone https://github.com/syntrix-systems/gwman && cd gwman && bash install.sh
+```
+
 ## Features
 
 - Manage configurations through web UI
-   - Add VPNs
-   - Add Proxies
+   - Add VPN Clients
+   - Add VPN Servers
+   - Add Proxy Clients
+   - Add Proxy Serisers
    - Manage Route Settings
 - Dashboard and status page
    - View system resource usage
    - View bandwidth usage for each connection
+- Firewall Management
 
 ## Supported Client Protocols (Outbound Connections)
 - [x] OpenVPN Client
@@ -22,6 +33,7 @@ This project was originally designed to convert a single board computer with lim
 - [x] OpenVPN Server
 - [x] L2TP/IPsec Server
 - [x] Socks Server
+- [x] ShadowSocks Server
 - [x] NAT on direct local incoming connections
 ## Routing Management
 - [x] Destination CIDR Selection
@@ -34,13 +46,9 @@ This project was originally designed to convert a single board computer with lim
 - [x] CPU usage
 - [x] RAM usage
 - [x] Connection overview
-# Installation
 
-1. Clone the project and extract it
-2. Run the installer
+## Password Reset
+Run the following command in order to reset the admin password
 ```bash
-bash install.sh
+python3 /opt/gwmanager/app.py --passwd
 ```
-3. A temporary password will be printed in the terminal with instructions on how to connect to the management interface
-4. Login to the web ui and change your password
-5. Add your config!

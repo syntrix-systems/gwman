@@ -5,6 +5,7 @@ set -e
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-flask python3-waitress iproute2 nftables openvpn openssl strongswan-starter xl2tpd ppp curl unzip ca-certificates iptables
 apt-get install -y microsocks || echo 'WARNING: microsocks package not available - inbound SOCKS disabled'
+apt-get install -y shadowsocks-libev qrencode || echo "WARNING: shadowsocks-libev/qrencode not available - inbound Shadowsocks disabled"
 # tun2socks (outbound SOCKS5/HTTP/Shadowsocks proxies)
 case "$(dpkg --print-architecture)" in arm64) A=arm64;; amd64) A=amd64;; armhf) A=armv7;; *) A="";; esac
 if [ -n "$A" ] && [ ! -x /usr/local/bin/tun2socks ]; then
